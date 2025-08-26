@@ -1,0 +1,627 @@
+"""
+Improved Premier League Match Predictor
+Features:
+- Enhanced data collection with error handling
+- More sophisticated feature engineering
+- Multiple model comparison
+- Cross-validation
+- Better evaluation metrics
+- Model persistence
+- Confidence intervals
+"""
+
+import pandas as pd
+import numpy as np
+import requests
+from io import StringIO
+import pickle
+import os
+from datetime import datetime, timedelta
+import warnings
+warnings.filterwarnings('ignore')
+
+# ML imports
+from sklearn.ensemble import RandomForestClassifier, GradientBoostingClassifier
+from sklearn.linear_model import LogisticRegression
+from sklearn.model_selection import train_test_split, cross_val_score, GridSearchCV
+from sklearn.metrics import accuracy_score, classification_report, confusion_matrix
+from sklearn.preprocessing import StandardScaler
+import matplotlib.pyplot as plt
+import seaborn as sns
+
+class ImprovedPLPredictor:
+    def __init__(self):
+        self.match_data = None
+        self.models = {
+            'random_forest': RandomForestClassifier(n_estimators=200, random_state=42, max_depth=10),
+            'gradient_boost': GradientBoostingClassifier(n_estimators=100, random_state=42),
+            'logistic': LogisticRegression(random_state=42, max_iter=1000)
+        }
+        self.best_model = None
+        self.scaler = StandardScaler()
+        self.feature_names = None
+        
+    def get_football_data(self, seasons=None):
+        """Enhanced data collection with better error handling"""
+        if seasons is None:
+            seasons = {
+                '2020-21': 'https://www.football-data.co.uk/mmz4281/2021/E0.csv',
+                '2021-22': 'https://www.football-data.co.uk/mmz4281/2122/E0.csv',
+                '2022-23': 'https://www.football-data.co.uk/mmz4281/2223/E0.csv',
+                '2023-24': 'https://www.football-data.co.uk/mmz4281/2324/E0.csv',
+                '2024-25': 'https://www.football-data.co.uk/mmz4281/2425/E0.csv'
+            }
+        
+        print("Downloading Premier League data...")
+        all_matches = []
+        
+        for season, url in seasons.items():
+            try:
+                print(f"Getting {season} season...")
+                response = requests.get(url, timeout=15)
+                response.raise_for_status()
+                
+                season_data = pd.read_csv(StringIO(response.text))
+                clean_data = self.clean_season_data(season_data, season)
+                
+                if not clean_data.empty:
+                    all_matches.append(clean_data)
+                    print(f"✓ Got {len(clean_data)} matches from {season}")
+                else:
+                    print(f"⚠ No valid matches found for {season}")
+                    
+            except Exception as e:
+                print(f"✗ Couldn't get {season} data: {e}")
+                continue
+        
+        if all_matches:
+            self.match_data = pd.concat(all_matches, ignore_index=True)
+            print(f"\n✓ Total matches loaded: {len(self.match_data)}")
+            print(f"Date range: {self.match_data['date'].min()} to {self.match_data['date'].max()}")
+            return True
+        else:
+            print("✗ No data could be loaded")
+            return False
+    
+    def clean_season_data(self, data, season):
+        """Enhanced data cleaning with date parsing"""
+        matches = []
+        
+        for _, row in data.iterrows():
+            try:
+                # Skip if essential data is missing
+                if pd.isna(row.get('FTHG')) or pd.isna(row.get('FTAG')):
+                    continue
+                
+                # Parse date
+                date_str = row.get('Date', '')
+                if date_str:
+                    try:
+                        # Handle different date formats
+                        if '/' in date_str:
+                            date = pd.to_datetime(date_str, format='%d/%m/%Y', errors='coerce')
+                        else:
+                            date = pd.to_datetime(date_str, errors='coerce')
+                    except:
+                        date = pd.NaT
+                else:
+                    date = pd.NaT
+                
+                home_team = str(row.get('HomeTeam', '')).strip()
+                away_team = str(row.get('AwayTeam', '')).strip()
+                
+                if not home_team or not away_team:
+                    continue
+                
+                home_goals = int(row['FTHG'])
+                away_goals = int(row['FTAG'])
+                
+                # Additional stats if available
+                home_shots = row.get('HS', 0) if pd.notna(row.get('HS')) else 0
+                away_shots = row.get('AS', 0) if pd.notna(row.get('AS')) else 0
+                home_shots_target = row.get('HST', 0) if pd.notna(row.get('HST')) else 0
+                away_shots_target = row.get('AST', 0) if pd.notna(row.get('AST')) else 0
+                
+                if home_goals > away_goals:
+                    result = 'H'
+                elif away_goals > home_goals:
+                    result = 'A'
+                else:
+                    result = 'D'
+                
+                matches.append({
+                    'season': season,
+                    'date': date,
+                    'home_team': home_team,
+                    'away_team': away_team,
+                    'home_goals': home_goals,
+                    'away_goals': away_goals,
+                    'home_shots': home_shots,
+                    'away_shots': away_shots,
+                    'home_shots_target': home_shots_target,
+                    'away_shots_target': away_shots_target,
+                    'result': result
+                })
+                
+            except (ValueError, TypeError) as e:
+                continue
+        
+        return pd.DataFrame(matches)
+    
+    def calculate_advanced_features(self, data, lookback_games=10):
+        """Enhanced feature engineering with more sophisticated metrics"""
+        print("Calculating advanced features...")
+        enhanced_data = data.copy().reset_index(drop=True)
+        
+        # Initialize feature columns
+        feature_cols = [
+            'home_team_strength', 'away_team_strength',
+            'home_attack_strength', 'away_attack_strength',
+            'home_defense_strength', 'away_defense_strength',
+            'home_recent_form', 'away_recent_form',
+            'home_goals_avg', 'away_goals_avg',
+            'home_goals_conceded_avg', 'away_goals_conceded_avg',
+            'home_shots_avg', 'away_shots_avg',
+            'home_win_rate', 'away_win_rate',
+            'home_advantage', 'goal_difference_trend',
+            'head_to_head_record'
+        ]
+        
+        for col in feature_cols:
+            enhanced_data[col] = 0.0
+        
+        # Calculate features for each match
+        for i in range(len(enhanced_data)):
+            match = enhanced_data.iloc[i]
+            home_team = match['home_team']
+            away_team = match['away_team']
+            
+            # Get team histories up to this point
+            home_history = self.get_team_history(enhanced_data, home_team, i, games=lookback_games)
+            away_history = self.get_team_history(enhanced_data, away_team, i, games=lookback_games)
+            
+            # Calculate comprehensive stats
+            home_stats = self.calculate_comprehensive_stats(home_history, home_team)
+            away_stats = self.calculate_comprehensive_stats(away_history, away_team)
+            
+            # Head-to-head record
+            h2h_record = self.calculate_head_to_head(enhanced_data, home_team, away_team, i)
+            
+            # Update features
+            enhanced_data.loc[i, 'home_team_strength'] = home_stats['strength']
+            enhanced_data.loc[i, 'away_team_strength'] = away_stats['strength']
+            enhanced_data.loc[i, 'home_attack_strength'] = home_stats['attack_strength']
+            enhanced_data.loc[i, 'away_attack_strength'] = away_stats['attack_strength']
+            enhanced_data.loc[i, 'home_defense_strength'] = home_stats['defense_strength']
+            enhanced_data.loc[i, 'away_defense_strength'] = away_stats['defense_strength']
+            enhanced_data.loc[i, 'home_recent_form'] = home_stats['form']
+            enhanced_data.loc[i, 'away_recent_form'] = away_stats['form']
+            enhanced_data.loc[i, 'home_goals_avg'] = home_stats['goals_for']
+            enhanced_data.loc[i, 'away_goals_avg'] = away_stats['goals_for']
+            enhanced_data.loc[i, 'home_goals_conceded_avg'] = home_stats['goals_against']
+            enhanced_data.loc[i, 'away_goals_conceded_avg'] = away_stats['goals_against']
+            enhanced_data.loc[i, 'home_shots_avg'] = home_stats['shots_avg']
+            enhanced_data.loc[i, 'away_shots_avg'] = away_stats['shots_avg']
+            enhanced_data.loc[i, 'home_win_rate'] = home_stats['win_rate']
+            enhanced_data.loc[i, 'away_win_rate'] = away_stats['win_rate']
+            enhanced_data.loc[i, 'home_advantage'] = 1.2  # Home advantage factor
+            enhanced_data.loc[i, 'goal_difference_trend'] = home_stats['goal_diff'] - away_stats['goal_diff']
+            enhanced_data.loc[i, 'head_to_head_record'] = h2h_record
+            
+            if (i + 1) % 500 == 0:
+                print(f"Processed {i + 1}/{len(enhanced_data)} matches")
+        
+        print(f"✓ Features calculated for {len(enhanced_data)} matches")
+        return enhanced_data
+    
+    def calculate_comprehensive_stats(self, history, team):
+        """Calculate comprehensive team statistics"""
+        if len(history) == 0:
+            return {
+                'strength': 50, 'attack_strength': 50, 'defense_strength': 50,
+                'form': 5, 'goals_for': 1.5, 'goals_against': 1.5,
+                'shots_avg': 10, 'win_rate': 0.33, 'goal_diff': 0
+            }
+        
+        points = 0
+        goals_scored = 0
+        goals_conceded = 0
+        shots_total = 0
+        wins = 0
+        
+        for _, match in history.iterrows():
+            if match['home_team'] == team:
+                goals_scored += match['home_goals']
+                goals_conceded += match['away_goals']
+                shots_total += match['home_shots']
+                
+                if match['result'] == 'H':
+                    points += 3
+                    wins += 1
+                elif match['result'] == 'D':
+                    points += 1
+            else:
+                goals_scored += match['away_goals']
+                goals_conceded += match['home_goals']
+                shots_total += match['away_shots']
+                
+                if match['result'] == 'A':
+                    points += 3
+                    wins += 1
+                elif match['result'] == 'D':
+                    points += 1
+        
+        num_games = len(history)
+        goals_per_game = goals_scored / num_games
+        goals_conceded_per_game = goals_conceded / num_games
+        shots_per_game = shots_total / num_games if shots_total > 0 else 10
+        win_rate = wins / num_games
+        goal_diff = goals_scored - goals_conceded
+        
+        # Strength calculations
+        strength = 50 + (points - (num_games * 1.5))  # Adjust around average
+        attack_strength = max(0, min(100, 50 + (goals_per_game - 1.5) * 20))
+        defense_strength = max(0, min(100, 50 + (1.5 - goals_conceded_per_game) * 20))
+        
+        return {
+            'strength': strength,
+            'attack_strength': attack_strength,
+            'defense_strength': defense_strength,
+            'form': points,
+            'goals_for': goals_per_game,
+            'goals_against': goals_conceded_per_game,
+            'shots_avg': shots_per_game,
+            'win_rate': win_rate,
+            'goal_diff': goal_diff
+        }
+    
+    def calculate_head_to_head(self, data, home_team, away_team, current_index, games=5):
+        """Calculate head-to-head record between teams"""
+        h2h_matches = data[
+            (((data['home_team'] == home_team) & (data['away_team'] == away_team)) |
+             ((data['home_team'] == away_team) & (data['away_team'] == home_team))) &
+            (data.index < current_index)
+        ].tail(games)
+        
+        if len(h2h_matches) == 0:
+            return 0
+        
+        home_team_wins = 0
+        for _, match in h2h_matches.iterrows():
+            if match['home_team'] == home_team and match['result'] == 'H':
+                home_team_wins += 1
+            elif match['away_team'] == home_team and match['result'] == 'A':
+                home_team_wins += 1
+        
+        return home_team_wins / len(h2h_matches) - 0.5  # Normalize around 0
+    
+    def get_team_history(self, data, team, current_match_index, games=10):
+        """Get team's recent match history"""
+        team_matches = data[
+            (((data['home_team'] == team) | (data['away_team'] == team)) &
+             (data.index < current_match_index))
+        ]
+        return team_matches.tail(games)
+    
+    def prepare_training_data(self, data, min_matches=50):
+        """Prepare data for training with feature selection"""
+        print("Preparing training data...")
+        
+        # Use matches after teams have played enough games for reliable stats
+        training_data = data.iloc[min_matches:].reset_index(drop=True)
+        
+        feature_columns = [
+            'home_team_strength', 'away_team_strength',
+            'home_attack_strength', 'away_attack_strength',
+            'home_defense_strength', 'away_defense_strength',
+            'home_recent_form', 'away_recent_form',
+            'home_goals_avg', 'away_goals_avg',
+            'home_goals_conceded_avg', 'away_goals_conceded_avg',
+            'home_win_rate', 'away_win_rate',
+            'home_advantage', 'goal_difference_trend',
+            'head_to_head_record'
+        ]
+        
+        X = training_data[feature_columns].copy()
+        y = training_data['result']
+        
+        # Handle any missing values
+        X = X.fillna(X.mean())
+        
+        self.feature_names = feature_columns
+        
+        print(f"✓ Training data shape: {X.shape}")
+        print(f"✓ Class distribution: {y.value_counts().to_dict()}")
+        
+        return X, y
+    
+    def train_models(self, test_size=0.2, cv_folds=5):
+        """Train and compare multiple models"""
+        if self.match_data is None:
+            print("No data loaded! Run get_football_data() first.")
+            return False
+        
+        print("Training models...")
+        
+        # Calculate features
+        data_with_features = self.calculate_advanced_features(self.match_data)
+        X, y = self.prepare_training_data(data_with_features)
+        
+        # Scale features
+        X_scaled = self.scaler.fit_transform(X)
+        X_scaled_df = pd.DataFrame(X_scaled, columns=X.columns)
+        
+        # Split data
+        X_train, X_test, y_train, y_test = train_test_split(
+            X_scaled_df, y, test_size=test_size, random_state=42, stratify=y
+        )
+        
+        model_scores = {}
+        
+        # Train and evaluate each model
+        for name, model in self.models.items():
+            print(f"\nTraining {name}...")
+            
+            # Cross-validation
+            cv_scores = cross_val_score(model, X_train, y_train, cv=cv_folds)
+            
+            # Train on full training set
+            model.fit(X_train, y_train)
+            
+            # Test predictions
+            test_predictions = model.predict(X_test)
+            test_accuracy = accuracy_score(y_test, test_predictions)
+            
+            model_scores[name] = {
+                'cv_mean': cv_scores.mean(),
+                'cv_std': cv_scores.std(),
+                'test_accuracy': test_accuracy,
+                'model': model
+            }
+            
+            print(f"CV Score: {cv_scores.mean():.3f} (±{cv_scores.std():.3f})")
+            print(f"Test Accuracy: {test_accuracy:.3f}")
+        
+        # Select best model
+        best_model_name = max(model_scores.keys(), key=lambda x: model_scores[x]['cv_mean'])
+        self.best_model = model_scores[best_model_name]['model']
+        
+        print(f"\n🏆 Best model: {best_model_name}")
+        print(f"Best CV score: {model_scores[best_model_name]['cv_mean']:.3f}")
+        
+        # Feature importance (for tree-based models)
+        if hasattr(self.best_model, 'feature_importances_'):
+            self.plot_feature_importance()
+        
+        # Detailed evaluation
+        test_pred = self.best_model.predict(X_test)
+        print(f"\nDetailed Test Results:")
+        print(f"Accuracy: {accuracy_score(y_test, test_pred):.3f}")
+        print("\nClassification Report:")
+        print(classification_report(y_test, test_pred))
+        
+        return True
+    
+    def plot_feature_importance(self):
+        """Plot feature importance"""
+        if hasattr(self.best_model, 'feature_importances_'):
+            importance_df = pd.DataFrame({
+                'feature': self.feature_names,
+                'importance': self.best_model.feature_importances_
+            }).sort_values('importance', ascending=False)
+            
+            print("\nTop 10 Most Important Features:")
+            for i, row in importance_df.head(10).iterrows():
+                print(f"  {row['feature']}: {row['importance']:.3f}")
+    
+    def predict_match(self, home_team, away_team, show_details=True):
+        """Enhanced match prediction with confidence intervals"""
+        if self.best_model is None:
+            print("No trained model available! Run train_models() first.")
+            return None, None
+        
+        if show_details:
+            print(f"PREDICTING: {home_team} vs {away_team}")
+            print("=" * 60)
+        
+        # Get recent match data
+        recent_matches = self.match_data.tail(200)
+        
+        # Calculate team statistics
+        home_recent = recent_matches[
+            (recent_matches['home_team'] == home_team) |
+            (recent_matches['away_team'] == home_team)
+        ].tail(10)
+        
+        away_recent = recent_matches[
+            (recent_matches['home_team'] == away_team) |
+            (recent_matches['away_team'] == away_team)
+        ].tail(10)
+        
+        home_stats = self.calculate_comprehensive_stats(home_recent, home_team)
+        away_stats = self.calculate_comprehensive_stats(away_recent, away_team)
+        
+        # Calculate head-to-head
+        h2h_record = self.calculate_head_to_head(
+            self.match_data, home_team, away_team, len(self.match_data)
+        )
+        
+        # Create feature vector
+        match_features = pd.DataFrame({
+            'home_team_strength': [home_stats['strength']],
+            'away_team_strength': [away_stats['strength']],
+            'home_attack_strength': [home_stats['attack_strength']],
+            'away_attack_strength': [away_stats['attack_strength']],
+            'home_defense_strength': [home_stats['defense_strength']],
+            'away_defense_strength': [away_stats['defense_strength']],
+            'home_recent_form': [home_stats['form']],
+            'away_recent_form': [away_stats['form']],
+            'home_goals_avg': [home_stats['goals_for']],
+            'away_goals_avg': [away_stats['goals_for']],
+            'home_goals_conceded_avg': [home_stats['goals_against']],
+            'away_goals_conceded_avg': [away_stats['goals_against']],
+            'home_win_rate': [home_stats['win_rate']],
+            'away_win_rate': [away_stats['win_rate']],
+            'home_advantage': [1.2],
+            'goal_difference_trend': [home_stats['goal_diff'] - away_stats['goal_diff']],
+            'head_to_head_record': [h2h_record]
+        })
+        
+        # Scale features
+        match_features_scaled = self.scaler.transform(match_features)
+        match_features_scaled_df = pd.DataFrame(
+            match_features_scaled, columns=match_features.columns
+        )
+        
+        # Make prediction
+        prediction = self.best_model.predict(match_features_scaled_df)[0]
+        probabilities = self.best_model.predict_proba(match_features_scaled_df)[0]
+        
+        results = {'H': f'{home_team} Win', 'D': 'Draw', 'A': f'{away_team} Win'}
+        classes = self.best_model.classes_
+        
+        if show_details:
+            print(f"PREDICTION: {results[prediction]}")
+            print(f"Confidence: {max(probabilities):.1%}")
+            print("\nProbabilities:")
+            for i, outcome in enumerate(classes):
+                prob = probabilities[i]
+                bar = "█" * int(prob * 30)
+                print(f"  {results[outcome]:<15}: {prob:.1%} {bar}")
+            
+            print(f"\nTeam Statistics:")
+            print(f"{home_team:>15}: Form={home_stats['form']:>4.1f}, "
+                  f"Attack={home_stats['attack_strength']:>4.1f}, "
+                  f"Defense={home_stats['defense_strength']:>4.1f}")
+            print(f"{away_team:>15}: Form={away_stats['form']:>4.1f}, "
+                  f"Attack={away_stats['attack_strength']:>4.1f}, "
+                  f"Defense={away_stats['defense_strength']:>4.1f}")
+        
+        return prediction, probabilities
+    
+    def predict_gameweek(self, fixtures):
+        """Predict multiple matches"""
+        print("GAMEWEEK PREDICTIONS")
+        print("=" * 60)
+        
+        predictions = []
+        for home_team, away_team in fixtures:
+            pred, probs = self.predict_match(home_team, away_team, show_details=False)
+            predictions.append({
+                'fixture': f"{home_team} vs {away_team}",
+                'prediction': pred,
+                'confidence': max(probs) if probs is not None else 0,
+                'home_prob': probs[list(self.best_model.classes_).index('H')] if probs is not None else 0,
+                'draw_prob': probs[list(self.best_model.classes_).index('D')] if probs is not None else 0,
+                'away_prob': probs[list(self.best_model.classes_).index('A')] if probs is not None else 0
+            })
+            
+        # Display predictions
+        pred_df = pd.DataFrame(predictions)
+        print(pred_df.to_string(index=False))
+        
+        return predictions
+    
+    def save_model(self, filename='pl_predictor_model.pkl'):
+        """Save trained model and scaler"""
+        if self.best_model is None:
+            print("No trained model to save!")
+            return False
+        
+        model_data = {
+            'model': self.best_model,
+            'scaler': self.scaler,
+            'feature_names': self.feature_names,
+            'classes': self.best_model.classes_
+        }
+        
+        with open(filename, 'wb') as f:
+            pickle.dump(model_data, f)
+        
+        print(f"Model saved to {filename}")
+        return True
+    
+    def load_model(self, filename='pl_predictor_model.pkl'):
+        """Load trained model and scaler"""
+        if not os.path.exists(filename):
+            print(f"Model file {filename} not found!")
+            return False
+        
+        with open(filename, 'rb') as f:
+            model_data = pickle.load(f)
+        
+        self.best_model = model_data['model']
+        self.scaler = model_data['scaler']
+        self.feature_names = model_data['feature_names']
+        
+        print(f"Model loaded from {filename}")
+        return True
+    
+    def backtest_predictions(self, test_matches=100):
+        """Backtest model on recent matches"""
+        if len(self.match_data) < test_matches + 50:
+            print("Not enough data for backtesting!")
+            return
+        
+        print(f"BACKTESTING ON LAST {test_matches} MATCHES")
+        print("=" * 60)
+        
+        # Use last matches for testing
+        test_data = self.match_data.tail(test_matches).copy()
+        correct_predictions = 0
+        
+        for i, match in test_data.iterrows():
+            pred, _ = self.predict_match(
+                match['home_team'], match['away_team'], show_details=False
+            )
+            if pred == match['result']:
+                correct_predictions += 1
+        
+        accuracy = correct_predictions / len(test_data)
+        print(f"Backtest Accuracy: {accuracy:.1%} ({correct_predictions}/{len(test_data)})")
+        
+        return accuracy
+
+def main():
+    """Main function to demonstrate the improved predictor"""
+    print("🔮 IMPROVED PREMIER LEAGUE PREDICTOR")
+    print("=" * 60)
+    
+    predictor = ImprovedPLPredictor()
+    
+    # Load data
+    if not predictor.get_football_data():
+        print("Failed to get data. Exiting.")
+        return
+    
+    # Train models
+    if not predictor.train_models():
+        print("Failed to train models. Exiting.")
+        return
+    
+    # Save model
+    predictor.save_model()
+    
+    # Example prediction
+    print("\nEXAMPLE PREDICTION:")
+    predictor.predict_match('Liverpool', 'Manchester City')
+    
+    # Example gameweek predictions
+    sample_fixtures = [
+        ('Arsenal', 'Chelsea'),
+        ('Manchester United', 'Tottenham'),
+        ('Brighton', 'Newcastle'),
+        ('Liverpool', 'Manchester City')
+    ]
+    
+    print(f"\nGAMEWEEK PREDICTIONS:")
+    predictor.predict_gameweek(sample_fixtures)
+    
+    # Backtest
+    print(f"\nBACKTEST RESULTS:")
+    predictor.backtest_predictions(50)
+    
+    return predictor
+
+if __name__ == "__main__":
+    model = main()
