@@ -193,3 +193,216 @@ This tool is for educational and research purposes. Sports betting involves risk
 ---
 
 **Built with Python, scikit-learn, and a passion for football analytics! ⚽📊**
+
+
+```
+
+
+"""
+Example usage of the Premier League Predictor
+This script demonstrates various ways to use the improved predictor
+"""
+
+from improved_predictor import ImprovedPLPredictor
+import pandas as pd
+
+def basic_example():
+    """Basic usage example"""
+    print("=== BASIC USAGE EXAMPLE ===")
+    
+    # Initialize predictor
+    predictor = ImprovedPLPredictor()
+    
+    # Load data
+    if not predictor.get_football_data():
+        print("Failed to load data")
+        return
+    
+    # Train models
+    if not predictor.train_models():
+        print("Failed to train models")
+        return
+    
+    # Predict a single match
+    prediction, probabilities = predictor.predict_match('Liverpool', 'Manchester City')
+    
+    return predictor
+
+def advanced_example():
+    """Advanced usage with multiple predictions and backtesting"""
+    print("\n=== ADVANCED USAGE EXAMPLE ===")
+    
+    predictor = ImprovedPLPredictor()
+    
+    # Load data with custom seasons
+    custom_seasons = {
+        '2022-23': 'https://www.football-data.co.uk/mmz4281/2223/E0.csv',
+        '2023-24': 'https://www.football-data.co.uk/mmz4281/2324/E0.csv',
+        '2024-25': 'https://www.football-data.co.uk/mmz4281/2425/E0.csv'
+    }
+    
+    if not predictor.get_football_data(custom_seasons):
+        return
+    
+    if not predictor.train_models(cv_folds=3):  # Faster training
+        return
+    
+    # Predict multiple matches
+    fixtures = [
+        ('Arsenal', 'Chelsea'),
+        ('Manchester United', 'Tottenham'),
+        ('Liverpool', 'Manchester City'),
+        ('Brighton', 'Newcastle'),
+        ('West Ham', 'Crystal Palace')
+    ]
+    
+    print("\n--- GAMEWEEK PREDICTIONS ---")
+    predictions = predictor.predict_gameweek(fixtures)
+    
+    # Backtest performance
+    print("\n--- BACKTESTING ---")
+    accuracy = predictor.backtest_predictions(test_matches=50)
+    
+    # Save model for later use
+    predictor.save_model('example_model.pkl')
+    
+    return predictor
+
+def model_persistence_example():
+    """Example of saving and loading models"""
+    print("\n=== MODEL PERSISTENCE EXAMPLE ===")
+    
+    # Train a model
+    predictor1 = ImprovedPLPredictor()
+    
+    if predictor1.get_football_data():
+        if predictor1.train_models():
+            # Save the model
+            predictor1.save_model('saved_predictor.pkl')
+            
+            # Create a new predictor and load the saved model
+            predictor2 = ImprovedPLPredictor()
+            
+            # Load match data (needed for predictions)
+            predictor2.get_football_data()
+            
+            # Load the trained model
+            if predictor2.load_model('saved_predictor.pkl'):
+                print("Model loaded successfully!")
+                
+                # Use the loaded model
+                predictor2.predict_match('Arsenal', 'Tottenham')
+
+def batch_prediction_example():
+    """Example of batch predictions with analysis"""
+    print("\n=== BATCH PREDICTION EXAMPLE ===")
+    
+    predictor = ImprovedPLPredictor()
+    
+    if not predictor.get_football_data():
+        return
+    
+    if not predictor.train_models():
+        return
+    
+    # Define a full gameweek
+    gameweek_fixtures = [
+        ('Arsenal', 'Aston Villa'),
+        ('Brighton', 'Brentford'),
+        ('Chelsea', 'Crystal Palace'),
+        ('Everton', 'Fulham'),
+        ('Leicester', 'Liverpool'),
+        ('Manchester City', 'Newcastle'),
+        ('Nottingham Forest', 'Sheffield United'),
+        ('Tottenham', 'West Ham'),
+        ('Bournemouth', 'Manchester United'),
+        ('Wolves', 'Burnley')
+    ]
+    
+    print(f"Predicting {len(gameweek_fixtures)} matches...")
+    predictions = predictor.predict_gameweek(gameweek_fixtures)
+    
+    # Analyze predictions
+    home_wins = sum(1 for p in predictions if p['prediction'] == 'H')
+    draws = sum(1 for p in predictions if p['prediction'] == 'D')
+    away_wins = sum(1 for p in predictions if p['prediction'] == 'A')
+    
+    print(f"\nPrediction Summary:")
+    print(f"Home wins: {home_wins}")
+    print(f"Draws: {draws}")
+    print(f"Away wins: {away_wins}")
+    
+    # High confidence predictions
+    high_confidence = [p for p in predictions if p['confidence'] > 0.6]
+    print(f"\nHigh confidence predictions ({len(high_confidence)}):")
+    for pred in high_confidence:
+        print(f"  {pred['fixture']}: {pred['prediction']} ({pred['confidence']:.1%})")
+
+def custom_team_analysis():
+    """Analyze specific teams in detail"""
+    print("\n=== CUSTOM TEAM ANALYSIS ===")
+    
+    predictor = ImprovedPLPredictor()
+    
+    if not predictor.get_football_data():
+        return
+    
+    if not predictor.train_models():
+        return
+    
+    # Analyze a specific team against various opponents
+    focus_team = 'Liverpool'
+    opponents = ['Manchester City', 'Arsenal', 'Chelsea', 'Manchester United', 'Tottenham']
+    
+    print(f"Analyzing {focus_team} against top opponents:")
+    
+    home_results = []
+    away_results = []
+    
+    for opponent in opponents:
+        # Home fixture
+        pred_h, prob_h = predictor.predict_match(focus_team, opponent, show_details=False)
+        home_results.append({
+            'opponent': opponent,
+            'prediction': pred_h,
+            'win_prob': prob_h[list(predictor.best_model.classes_).index('H')]
+        })
+        
+        # Away fixture
+        pred_a, prob_a = predictor.predict_match(opponent, focus_team, show_details=False)
+        away_results.append({
+            'opponent': opponent,
+            'prediction': pred_a,
+            'win_prob': prob_a[list(predictor.best_model.classes_).index('A')]
+        })
+    
+    # Summary
+    home_df = pd.DataFrame(home_results)
+    away_df = pd.DataFrame(away_results)
+    
+    print(f"\n{focus_team} Home Fixtures:")
+    print(home_df.to_string(index=False))
+    
+    print(f"\n{focus_team} Away Fixtures:")
+    print(away_df.to_string(index=False))
+
+if __name__ == "__main__":
+    print("Premier League Predictor - Example Usage")
+    print("=" * 50)
+    
+    # Run examples
+    try:
+        predictor = basic_example()
+        advanced_example()
+        batch_prediction_example()
+        custom_team_analysis()
+        
+        print("\n" + "=" * 50)
+        print("All examples completed successfully!")
+        
+    except Exception as e:
+        print(f"Error running examples: {e}")
+        print("Make sure you have an internet connection for data download.")
+
+
+```
